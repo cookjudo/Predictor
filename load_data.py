@@ -1,124 +1,112 @@
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.utils.data import TensorDataset, DataLoader
-from sklearn.preprocessing import MinMaxScaler
-import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
+from sklearn.metrics import mean_squared_error, r2_score
 
-FILE_PATH = 'housing.csv'
-BATCH_SIZE = 64
-EPOCHS = 100
-LEARNING_RATE = 0.1
-INPUT_DIM = 13
-HIDDEN_DIM = 64
+raw_data = pd.read_csv("housing.csv")
+raw_data = raw_data.dropna()
 
-try:
-    df = pd.read_csv(FILE_PATH)
-    
-    # 1.
-    df = df.dropna()
-    
-    # 2. 
-    if 'ocean_proximity' in df.columns:
-        df = pd.get_dummies(df, columns=['ocean_proximity'], drop_first=False)
+data = pd.get_dummies(raw_data, columns=["ocean_proximity"], dtype=int)
 
-    TARGET_COL = 'median_house_value'
-    X = df.drop(TARGET_COL, axis=1)
-    y = df[TARGET_COL]
+##print(raw_data.head())
 
-    # 3.
-    scaler = MinMaxScaler()
-    X_normalized = scaler.fit_transform(X)
+shuffled_data = data.sample(n=len(data), random_state=1)
 
-    # 4.
-    tensor_x = torch.tensor(X_normalized, dtype=torch.float32)
-    tensor_y = torch.tensor(y.values, dtype=torch.float32).view(-1, 1)
-    
-    X_train, X_test, y_train, y_test = train_test_split(
-        tensor_x, tensor_y, test_size=0.2, random_state=42
-    )
+##print(shuffled_data.head())
 
-    # 5.
-    train_dataset = TensorDataset(X_train, y_train)
-    test_dataset = TensorDataset(X_test, y_test)
-    
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
-    
-    INPUT_DIM = X_train.shape[1]
+X = shuffled_data.drop("median_house_value", axis=1)
+y = shuffled_data["median_house_value"].values.reshape(-1, 1)
 
-except FileNotFoundError:
-    print(f"Error: The file '{FILE_PATH}' was not found.")
-    exit()
-except Exception as e:
-    print(f"An unexpected error occurred during data processing: {e}")
-    exit()
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
-class RegressionModel(nn.Module):
-    def __init__(self, input_size, hidden_size):
-        super(RegressionModel, self).__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, 1)
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+print(X_train)
+
+poly = PolynomialFeatures(degree=2)
+
+X_train_poly = poly.fit_transform(X_train)
+X_test_poly = poly.transform(X_test)
+
+X_train_data = X_train_poly
+X_test_data = X_test_poly
+
+y_scaler = StandardScaler()
+
+y_train_scaled = y_scaler.fit_transform(y_train)
+y_test_scaled = y_scaler.transform(y_test)
+
+X_train_tensor = torch.from_numpy(X_train_data).float()
+y_train_tensor = torch.from_numpy(y_train_scaled).float()
+X_test_tensor = torch.from_numpy(X_test_data).float()
+y_test_tensor = torch.from_numpy(y_test_scaled).float()
+
+input_size = X_train_data.shape[1]
+
+class neural(nn.Module):
+    def __init__(self, input_size):
+        super(neural, self).__init__()
+        
+        self.fc1 = nn.Linear(input_size, 64)
+        self.relu = nn.ReLU() 
+        self.fc2 = nn.Linear(64, 1) 
 
     def forward(self, x):
-        x = F.relu(self.fc1(x)) 
-        x = F.relu(self.fc2(x))
-        x = self.fc3(x)
+        x = self.fc1(x)
+        x = self.relu(x)
+        x = self.fc2(x)
         return x
-
-model = RegressionModel(INPUT_DIM, HIDDEN_DIM)
-criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-
-train_loss_history = []
-for epoch in range(EPOCHS):
-    model.train() 
-    total_loss = 0
     
-    for batch_features, batch_targets in train_loader:
-        optimizer.zero_grad()
-        predictions = model(batch_features)
-        loss = criterion(predictions, batch_targets)
-        loss.backward()
-        optimizer.step()
-        total_loss += loss.item() * batch_features.size(0)
+model = neural(input_size)
+criterion = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+num_epochs = 100
 
-    avg_loss = total_loss / len(train_dataset)
-    train_loss_history.append(avg_loss)
+for epoch in range(num_epochs):
+    model.train()
+    optimizer.zero_grad()
+    outputs = model(X_train_tensor)
+    loss = criterion(outputs, y_train_tensor)
+    loss.backward()
+    optimizer.step()
 
-    if (epoch + 1) % 10 == 0:
-        print(f'Epoch [{epoch+1}/{EPOCHS}], Loss: {avg_loss:.4f}')
-
-model.eval() 
-test_predictions = []
-true_targets = []
-
+model.eval()
 with torch.no_grad():
-    for features, targets in test_loader:
-        predictions = model(features)
-        test_predictions.extend(predictions.squeeze().tolist())
-        true_targets.extend(targets.squeeze().tolist())
+    y_pred = model(X_test_tensor)
 
-mse = np.mean((np.array(test_predictions) - np.array(true_targets)) ** 2)
+y_test_scaled_np = y_test_tensor.numpy()
+y_pred_scaled_np = y_pred.numpy()
+y_test_final = y_scaler.inverse_transform(y_test_scaled_np)
+y_pred_final = y_scaler.inverse_transform(y_pred_scaled_np)
+mse = mean_squared_error(y_test_final, y_pred_final)
+r2 = r2_score(y_test_final, y_pred_final)
 rmse = np.sqrt(mse)
 
-print(f"Test Set RMSE: {rmse:.2f}")
 
 
+W1 = model.fc1.weight.data.numpy()
+b1 = model.fc1.bias.data.numpy()
+
+W2 = model.fc2.weight.data.numpy()
+b2 = model.fc2.bias.data.numpy()
 
 plt.figure(figsize=(10, 6))
-plt.scatter(true_targets, test_predictions, alpha=0.3)
-plt.plot([min(true_targets), max(true_targets)], 
-         [min(true_targets), max(true_targets)], 
-         color='red', linestyle='--', linewidth=2, label='Perfect Prediction') 
-plt.xlabel("True Median House Value")
-plt.ylabel("Predicted Median House Value")
-plt.title(f"True vs. Predicted House Values (RMSE: {rmse:.2f})")
-plt.grid(True)
-plt.savefig('house_price_prediction_plot.png')
-print("Plot saved to 'house_price_prediction_plot.png'")
+plt.scatter(y_test_final, y_pred_final, alpha=0.6, color='darkorange', label='Predicted vs. Actual Points')
+
+min_val = min(y_test_final.min(), y_pred_final.min())
+max_val = max(y_test_final.max(), y_pred_final.max())
+perfect_line = np.linspace(min_val, max_val, 100)
+
+plt.plot(perfect_line, perfect_line, color='blue', linestyle='--', linewidth=2, label='Perfect Prediction Line (y=x)')
+
+plt.xlabel('Actual Median House Value ($)')
+plt.ylabel('Predicted Median House Value ($)')
+plt.legend()
+plt.grid(True, linestyle=':', alpha=0.7)
+plt.show()
